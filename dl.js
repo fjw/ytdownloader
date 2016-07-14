@@ -20,25 +20,23 @@ var dd = function(vari) { console.log(require('util').inspect(vari, {colors: tru
 
 // -----------------------------------
 
+
 var baseuri = "https://www.youtube.com";
 
 var username = "quill18creates";
 var dest = __dirname + "/down";
-var parallelvideos = 4;
+var parallelvideos = 6;
+var retries = 0;
+var waittime = 10000;
+var ffmpegsettings = ""; //"-vcodec copy -acodec copy";
+var debug = false;
 
-var debug = false; // only get first element when debug
-
-/*
-getAllVideosInAllPlaylistsOfUser(username).then(function(list) {
-    fs.writeFile("test.json", JSON.stringify(list));
-});
-*/
 
 console.log("\n");
 console.log("crawling youtube. getting all videos....");
-getAllVideosInAllPlaylistsOfUser(username).then(function(list) {
+//getAllVideosInAllPlaylistsOfUser(username).then(function(list) {
 
-    //var list = JSON.parse(fs.readFileSync("test.json"));
+    var list = JSON.parse(fs.readFileSync("test.json"));
 
     fs.stat(dest, function(err, stats) {
 
@@ -72,10 +70,11 @@ getAllVideosInAllPlaylistsOfUser(username).then(function(list) {
 
     });
 
-});
+//});
 
 
 var slots = [];
+var msgs = "";
 
 function startDownloads(downloadlist) {
 
@@ -84,7 +83,7 @@ function startDownloads(downloadlist) {
 
         if (downloadlist.length > 0 && slots.length < parallelvideos) {
 
-            downloadNext(downloadlist, slotids);
+            downloadNext(downloadlist, slotids, false);
             slotids++;
 
         }
@@ -97,23 +96,71 @@ function startDownloads(downloadlist) {
 
         _.each(slots, function(slot) {
 
-            jetty.text(slot.title + "\n    => " + slot.status + " - audio: " + slot.audioprogress + "%  video: " + slot.videoprogress + "% \n\n");
+            jetty.rgb([1,1,4]).text(slot.title + "\n").reset();
+            if(slot.status == "downloading") {
+                jetty.text("    => " + slot.status + " - audio: " + slot.audioprogress + "%  video: " + slot.videoprogress + "% \n");
+            } else if (slot.status == "encoding") {
+                jetty.text("    => " + slot.status + " - videolength: " + slot.encodingprogress + " \n");
+            } else {
+                jetty.text("    => " + slot.status + " \n");
+            }
+
+            if( slot.retries > 0 ) {
+                jetty.rgb([6,3,3]).text("    => retry #" + slot.retries + "\n").reset();
+                jetty.text("    => last error:\n" + slot.lasterror + "\n");
+            }
+
+            jetty.text("\n");
 
         });
+
+        jetty.text(msgs);
 
         if(downloadlist.length == 0 && slots.length == 0) {
             jetty.text(" ------------- all done ------------- ");
             process.exit();
         }
 
-    }, 1000);
+    }, 300);
 
 }
 
 
-function downloadNext(downloadlist, slotid) {
+function downloadNext(downloadlist, slotid, failed) {
+    var thisdownload;
 
-    var thisdownload = downloadlist.shift();
+    if(!failed) {
+        thisdownload = downloadlist.shift();
+
+        slots.push({
+            id: slotid,
+            status: "starting",
+            audioprogress: 0,
+            videoprogress: 0,
+            encodingprogress: "",
+            title: thisdownload.title,
+            lasterror: "",
+            retries: 0,
+            waitStart: 0,
+            data: thisdownload
+        });
+
+    } else {
+
+        //alter job
+        var index = _.findIndex(slots, function(item) {
+            return item.id == slotid;
+        });
+        thisdownload = slots[index].data;
+
+        if(slots[index].waitStart + waittime < Date.now()) {
+            slots[index].status = "waiting";
+            setTimeout(function() {
+                downloadNext(downloadlist, slotid, true);
+            }, 3000);
+            return;
+        }
+    }
 
     fs.stat(thisdownload.playlistfolder, function(err, stats) {
 
@@ -121,13 +168,7 @@ function downloadNext(downloadlist, slotid) {
             fs.mkdirSync(thisdownload.playlistfolder);
         }
 
-        slots.push({
-            id: slotid,
-            status: "starting",
-            audioprogress: 0,
-            videoprogress: 0,
-            title: thisdownload.title
-        });
+
 
         getVideoAndAudioAndDownloadAndEncode(thisdownload.id, thisdownload.dest, function(s) {
 
@@ -148,6 +189,9 @@ function downloadNext(downloadlist, slotid) {
                 if (s.videoprogress) {
                     slots[index].videoprogress = s.videoprogress;
                 }
+                if (s.encodingprogress) {
+                    slots[index].encodingprogress = s.encodingprogress;
+                }
 
             }
 
@@ -155,6 +199,32 @@ function downloadNext(downloadlist, slotid) {
 
             //done
             slots = _.reject(slots, function(item) { return item.id == slotid; });
+
+        }, function(err) {
+
+            dd(err);
+
+            //failed
+            //status
+            var index = _.findIndex(slots, function(item) {
+                return item.id == slotid;
+            });
+
+            if(index >= 0) {
+                slots[index].status = "failed";
+                slots[index].audioprogress = 0;
+                slots[index].videoprogress = 0;
+                slots[index].encodingprogress = "";
+                slots[index].retries++;
+                slots[index].waitStart = Date.now();
+                slots[index].lasterror = err;
+            }
+
+            if(slots[index].retries > retries) {
+                slots = _.reject(slots, function(item) { return item.id == slotid; });
+            } else {
+                downloadNext(downloadlist, slotid, true);
+            }
 
         });
 
@@ -180,6 +250,8 @@ function getVideoAndAudioAndDownloadAndEncode(id, dest, scb) {
 
         if(err) {
             // Datei existiert noch nicht
+
+            scb( { status: "getting videodata from yt" } );
 
             getBestVideoUrl(id).then(function (data) {
 
@@ -215,26 +287,42 @@ function getVideoAndAudioAndDownloadAndEncode(id, dest, scb) {
                     scb( { status: "encoding" } );
 
                     //encode
-                    var cmd = 'ffmpeg -i ' + dest + "_video -i " + dest + "_audio " + dest;
+                    var sets = "";
+                    if (ffmpegsettings != "") {
+                        sets = ffmpegsettings + " ";
+                    }
+                    var cmd = 'ffmpeg -i ' + dest + "_video -i " + dest + "_audio " + sets + dest + " -v quiet -progress -";
 
-                    exec(cmd, {maxBuffer: 1024 * 1024 * 3}, function (err, stdout, stderr) { //Maxbuffer auf 3 MB
+                    var child = exec(cmd, {maxBuffer: 1024 * 1024 * 5}, function (err, stdout, stderr) { //Maxbuffer auf 5 MB
 
                         if (!err) {
-                            //console.log(" -> encoding done");
                             deferred.resolve();
                         } else {
-                            console.log(" -> encoding failed");
+
                             deferred.reject(err);
                         }
 
                         fs.unlink(dest+"_video");
                         fs.unlink(dest+"_audio");
 
+
+                    });
+
+                    child.stdout.on("data", function(data) {
+                        var m = data.match(/out_time=([^\s]+)/);;
+                        if(m.length >= 2) {
+                            var t = m[1].split(".")[0];
+                            scb({encodingprogress: t});
+                        }
                     });
 
 
+                }, function(err) {
+                    deferred.reject(err);
                 });
 
+            }, function(err) {
+                deferred.reject(err);
             });
         } else {
             //console.log(" -> finished video there... skipping..")
@@ -250,50 +338,48 @@ function download(url, dest, scb, statuskey) {
 
     fs.stat(dest, function(err, stats) {
 
-        if(err) {
-            // Datei existiert noch nicht
+        if(!err) {
+            // file exists
+            fs.unlinkSync(dest);
+        }
 
-            var file = fs.createWriteStream(dest);
+        var file = fs.createWriteStream(dest);
 
-            https.get(url, function(response) {
+        https.get(url, function (response) {
 
-                var len = parseInt(response.headers['content-length'], 10);
-                var cur = 0;
+            var len = parseInt(response.headers['content-length'], 10);
+            var cur = 0;
 
 
-                response.pipe(file);
+            response.pipe(file);
 
-                file.on('finish', function() {
+            file.on('finish', function () {
 
-                    file.close(function() {
-                        deferred.resolve();
-                    });
+                file.close(function () {
+                    deferred.resolve();
                 });
+            });
 
-                response.on("data", function(chunk) {
-                    cur += chunk.length;
+            response.on("data", function (chunk) {
+                cur += chunk.length;
 
-                    var s = {};
-                    s[statuskey] = Math.round(100.0 * cur / len);
+                var s = {};
+                s[statuskey] = Math.round(100.0 * cur / len);
 
-                    scb(s);
-                });
-
-
-            }).on('error', function(err) {
-                fs.unlink(dest);
-
-                console.log("... error ...");
-
-                deferred.reject(err.message);
-
+                scb(s);
             });
 
 
-        } else {
-            console.log("... skipping ...");
-            deferred.resolve(); // Datei schon da
-        }
+        }).on('error', function (err) {
+            fs.unlink(dest);
+
+            d("fpp");
+            dd(err);
+
+            deferred.reject(err.message);
+
+        });
+
 
     });
 
@@ -309,6 +395,11 @@ function getBestVideoUrl(id) {
         if (!error && response.statusCode == 200) {
 
             var infos = querystring.parse(body);
+
+            if(!infos["adaptive_fmts"]) {
+                deferred.reject(error);
+                return;
+            }
 
             var rformats = infos["adaptive_fmts"].split(",");
 

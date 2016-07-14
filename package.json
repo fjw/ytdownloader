@@ -1,0 +1,27 @@
+{
+  "name": "ytdownloader",
+  "version": "1.0.0",
+  "description": "Youtube downloader ------------------",
+  "main": "dl.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fjw/ytdownloader.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/fjw/ytdownloader/issues"
+  },
+  "homepage": "https://github.com/fjw/ytdownloader",
+  "dependencies": {
+    "cheerio": "^0.20.0",
+    "html-entities": "^1.2.0",
+    "jetty": "^0.2.1",
+    "lodash": "^4.13.1",
+    "q": "^1.4.1",
+    "request": "^2.73.0"
+  }
+}
