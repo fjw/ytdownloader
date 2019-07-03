@@ -4,7 +4,9 @@
   "description": "Youtube downloader ------------------",
   "main": "dl.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "snyk-protect": "snyk protect",
+    "prepublish": "npm run snyk-protect"
   },
   "repository": {
     "type": "git",
@@ -22,6 +24,8 @@
     "jetty": "^0.2.1",
     "lodash": "^4.13.1",
     "q": "^1.4.1",
-    "request": "^2.73.0"
-  }
+    "request": "^2.73.0",
+    "snyk": "^1.189.0"
+  },
+  "snyk": true
 }
